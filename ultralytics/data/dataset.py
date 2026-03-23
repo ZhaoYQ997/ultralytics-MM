@@ -40,6 +40,7 @@ from .utils import (
     save_dataset_cache_file,
     verify_image,
     verify_image_label,
+    resolve_modal_path,
 )
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for Ultralytics YOLO models
@@ -86,6 +87,8 @@ class YOLODataset(BaseDataset):
         self.data = data
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
         super().__init__(*args, channels=self.data.get("channels", 3), **kwargs)
+        self.modal_root = self.data.get("modal_root") or self.data.get("ir")
+        self.modal_suffix = self.data.get("modal_suffix", "ir")
 
     def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
         """Cache dataset labels, check images and read shapes.
@@ -148,7 +151,8 @@ class YOLODataset(BaseDataset):
             LOGGER.info("\n".join(msgs))
         if nf == 0:
             LOGGER.warning(f"{self.prefix}No labels found in {path}. {HELP_URL}")
-        x["hash"] = get_hash(self.label_files + self.im_files)
+        modal_files = [resolve_modal_path(f, self.modal_root, self.modal_suffix) for f in self.im_files] if self.channels == 4 else []
+        x["hash"] = get_hash(self.label_files + self.im_files + modal_files)
         x["results"] = nf, nm, ne, nc, len(self.im_files)
         x["msgs"] = msgs  # warnings
         save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
@@ -167,7 +171,8 @@ class YOLODataset(BaseDataset):
         try:
             cache, exists = load_dataset_cache_file(cache_path), True  # attempt to load a *.cache file
             assert cache["version"] == DATASET_CACHE_VERSION  # matches current version
-            assert cache["hash"] == get_hash(self.label_files + self.im_files)  # identical hash
+            modal_files = [resolve_modal_path(f, self.modal_root, self.modal_suffix) for f in self.im_files] if self.channels == 4 else []
+            assert cache["hash"] == get_hash(self.label_files + self.im_files + modal_files)  # identical hash
         except (FileNotFoundError, AssertionError, AttributeError, ModuleNotFoundError):
             cache, exists = self.cache_labels(cache_path), False  # run cache ops
 

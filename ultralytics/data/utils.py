@@ -62,6 +62,27 @@ def img2label_paths(img_paths: list[str]) -> list[str]:
     sa, sb = f"{os.sep}images{os.sep}", f"{os.sep}labels{os.sep}"  # /images/, /labels/ substrings
     return [sb.join(x.rsplit(sa, 1)).rsplit(".", 1)[0] + ".txt" for x in img_paths]
 
+def resolve_modal_path(im_file: str, modal_root: str | Path | None = None, modal_suffix: str = "ir") -> str:
+    """Resolve the paired modality image path for a given RGB image path."""
+    path = Path(im_file)
+    if modal_root:
+        try:
+            relative = path.relative_to(path.parents[1]) if path.parent.name in {"train", "val", "test"} else path.name
+        except Exception:
+            relative = path.name
+        candidate = Path(modal_root) / relative
+    else:
+        stem = path.stem
+        if f"_{modal_suffix}" not in stem:
+            stem = f"{stem}_{modal_suffix}"
+        candidate = path.with_name(stem + path.suffix)
+    return str(candidate)
+
+
+def infer_modality_from_channels(channels: int) -> str:
+    """Infer modality name from channel count."""
+    return {1: "ir", 3: "rgb", 4: "rgbir"}.get(channels, "rgb")
+
 
 def check_file_speeds(
     files: list[str], threshold_ms: float = 10, threshold_mb: float = 50, max_files: int = 5, prefix: str = ""

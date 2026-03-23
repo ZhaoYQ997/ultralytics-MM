@@ -15,7 +15,13 @@ import cv2
 import numpy as np
 from torch.utils.data import Dataset
 
-from ultralytics.data.utils import FORMATS_HELP_MSG, HELP_URL, IMG_FORMATS, check_file_speeds
+from ultralytics.data.utils import (
+    FORMATS_HELP_MSG,
+    HELP_URL,
+    IMG_FORMATS,
+    check_file_speeds,
+    resolve_modal_path,
+)
 from ultralytics.utils import DEFAULT_CFG, LOCAL_RANK, LOGGER, NUM_THREADS, TQDM
 from ultralytics.utils.patches import imread
 
@@ -113,6 +119,8 @@ class BaseDataset(Dataset):
         self.prefix = prefix
         self.fraction = fraction
         self.channels = channels
+        self.modal_root = None
+        self.modal_suffix = "ir"
         self.cv2_flag = cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR
         self.im_files = self.get_img_files(self.img_path)
         self.labels = self.get_labels()
@@ -207,57 +215,62 @@ class BaseDataset(Dataset):
             if self.single_cls:
                 self.labels[i]["cls"][:, 0] = 0
 
+    def _load_single_image_file(self, file: str, npy_file: Path | None = None) -> np.ndarray | None:
+        """Load a single image file or cached numpy file."""
+        if npy_file and npy_file.exists():
+            try:
+                return np.load(npy_file)
+            except Exception as e:
+                LOGGER.warning(f"{self.prefix}Removing corrupt *.npy image file {npy_file} due to: {e}")
+                npy_file.unlink(missing_ok=True)
+        return imread(file, flags=self.cv2_flag)
+
+    def _load_modal_image(self, i: int, im: np.ndarray) -> np.ndarray:
+        """Load and concatenate paired modal imagery for RGB+IR inputs."""
+        modal_file = resolve_modal_path(self.im_files[i], self.modal_root, self.modal_suffix)
+        modal = imread(modal_file, flags=cv2.IMREAD_GRAYSCALE)
+        if modal is None:
+            raise FileNotFoundError(f"Paired modality image not found: {modal_file}")
+        if modal.ndim == 2:
+            modal = modal[..., None]
+        if modal.shape[:2] != im.shape[:2]:
+            modal = cv2.resize(modal, (im.shape[1], im.shape[0]), interpolation=cv2.INTER_LINEAR)[..., None]
+        return np.concatenate((im, modal), axis=2)
+
     def load_image(self, i: int, rect_mode: bool = True) -> tuple[np.ndarray, tuple[int, int], tuple[int, int]]:
-        """Load an image from dataset index 'i'.
-
-        Args:
-            i (int): Index of the image to load.
-            rect_mode (bool): Whether to use rectangular resizing.
-
-        Returns:
-            im (np.ndarray): Loaded image as a NumPy array.
-            hw_original (tuple[int, int]): Original image dimensions in (height, width) format.
-            hw_resized (tuple[int, int]): Resized image dimensions in (height, width) format.
-
-        Raises:
-            FileNotFoundError: If the image file is not found.
-        """
+        """Load an image from dataset index 'i'."""
         im, f, fn = self.ims[i], self.im_files[i], self.npy_files[i]
         if im is None:  # not cached in RAM
-            if fn.exists():  # load npy
-                try:
-                    im = np.load(fn)
-                except Exception as e:
-                    LOGGER.warning(f"{self.prefix}Removing corrupt *.npy image file {fn} due to: {e}")
-                    Path(fn).unlink(missing_ok=True)
-                    im = imread(f, flags=self.cv2_flag)  # BGR
-            else:  # read image
-                im = imread(f, flags=self.cv2_flag)  # BGR
+            im = self._load_single_image_file(f, fn if self.channels != 4 else None)
             if im is None:
                 raise FileNotFoundError(f"Image Not Found {f}")
-
-            h0, w0 = im.shape[:2]  # orig hw
-            if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
-                r = self.imgsz / max(h0, w0)  # ratio
-                if r != 1:  # if sizes are not equal
-                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
-                    im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
-            elif not (h0 == w0 == self.imgsz):  # resize by stretching image to square imgsz
-                im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
             if im.ndim == 2:
                 im = im[..., None]
+            if self.channels == 4:
+                im = self._load_modal_image(i, im)
 
-            # Add to buffer if training with augmentations
+            h0, w0 = im.shape[:2]
+            if rect_mode:
+                r = self.imgsz / max(h0, w0)
+                if r != 1:
+                    w, h = (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz))
+                    im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+                    if im.ndim == 2:
+                        im = im[..., None]
+            elif not (h0 == w0 == self.imgsz):
+                im = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
+                if im.ndim == 2:
+                    im = im[..., None]
+
             if self.augment:
-                self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+                self.ims[i], self.im_hw0[i], self.im_hw[i] = im, (h0, w0), im.shape[:2]
                 self.buffer.append(i)
-                if 1 < len(self.buffer) >= self.max_buffer_length:  # prevent empty buffer
+                if 1 < len(self.buffer) >= self.max_buffer_length:
                     j = self.buffer.pop(0)
                     if self.cache != "ram":
                         self.ims[j], self.im_hw0[j], self.im_hw[j] = None, None, None
 
             return im, (h0, w0), im.shape[:2]
-
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
 
     def cache_images(self) -> None:
@@ -281,7 +294,10 @@ class BaseDataset(Dataset):
         f = self.npy_files[i]
         if not f.exists():
             try:
-                np.save(f.as_posix(), imread(self.im_files[i], flags=self.cv2_flag), allow_pickle=False)
+                im = self._load_single_image_file(self.im_files[i])
+                if self.channels == 4 and im is not None:
+                    im = self._load_modal_image(i, im)
+                np.save(f.as_posix(), im, allow_pickle=False)
             except Exception as e:
                 f.unlink(missing_ok=True)
                 LOGGER.warning(f"{self.prefix}WARNING ⚠️ Failed to cache image {f}: {e}")
@@ -301,7 +317,7 @@ class BaseDataset(Dataset):
         n = min(self.ni, 30)  # extrapolate from 30 random images
         for _ in range(n):
             im_file = random.choice(self.im_files)
-            im = imread(im_file)
+            im = self._load_single_image_file(im_file)
             if im is None:
                 continue
             b += im.nbytes
@@ -333,7 +349,7 @@ class BaseDataset(Dataset):
         b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
         n = min(self.ni, 30)  # extrapolate from 30 random images
         for _ in range(n):
-            im = imread(random.choice(self.im_files))  # sample image
+            im = self._load_single_image_file(random.choice(self.im_files))  # sample image
             if im is None:
                 continue
             ratio = self.imgsz / max(im.shape[0], im.shape[1])  # max(h, w)  # ratio

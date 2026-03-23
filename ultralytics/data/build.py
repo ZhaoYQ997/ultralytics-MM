@@ -25,6 +25,7 @@ from ultralytics.data.loaders import (
     LoadScreenshots,
     LoadStreams,
     LoadTensor,
+    LoadPairedImagesAndVideos,
     SourceTypes,
     autocast_list,
 )
@@ -394,6 +395,7 @@ def load_inference_source(
     vid_stride: int = 1,
     buffer: bool = False,
     channels: int = 3,
+    source_ir: str | Path | list | tuple | None = None,
 ):
     """Load an inference source for object detection and apply necessary transformations.
 
@@ -404,6 +406,7 @@ def load_inference_source(
         vid_stride (int, optional): The frame interval for video sources.
         buffer (bool, optional): Whether stream frames will be buffered.
         channels (int, optional): The number of input channels for the model.
+        source_ir (str | Path | list | tuple | None, optional): Paired IR source for 4-channel RGB+IR inference.
 
     Returns:
         (Dataset): A dataset object for the specified input source with attached source_type attribute.
@@ -430,7 +433,11 @@ def load_inference_source(
     elif from_img:
         dataset = LoadPilAndNumpy(source, channels=channels)
     else:
-        dataset = LoadImagesAndVideos(source, batch=batch, vid_stride=vid_stride, channels=channels)
+        dataset = (
+            LoadPairedImagesAndVideos(source, source_ir, batch=batch, vid_stride=vid_stride)
+            if channels == 4 and source_ir is not None
+            else LoadImagesAndVideos(source, batch=batch, vid_stride=vid_stride, channels=channels)
+        )
 
     # Attach source types to the dataset
     setattr(dataset, "source_type", source_type)
