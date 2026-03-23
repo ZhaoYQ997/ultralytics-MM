@@ -1,0 +1,20 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# VEDAI IR detection dataset example config for YOLO11 training/inference
+
+path: /data/VEDAI
+train: images/ir/train
+val: images/ir/val
+test: images/ir/test
+channels: 1
+modality: ir
+
+names:
+  0: car
+  1: truck
+  2: tractor
+  3: camping-car
+  4: van
+  5: pickup
+  6: ship
+  7: plane
+  8: other-vehicle

@@ -548,6 +548,48 @@ class LoadPilAndNumpy:
         return self
 
 
+class LoadPairedImagesAndVideos:
+    """Load aligned RGB and IR sources and concatenate them into 4-channel tensors."""
+
+    def __init__(self, source: str | Path | list, source_ir: str | Path | list, batch: int = 1, vid_stride: int = 1):
+        self.rgb = LoadImagesAndVideos(source, batch=batch, vid_stride=vid_stride, channels=3)
+        self.ir = LoadImagesAndVideos(source_ir, batch=batch, vid_stride=vid_stride, channels=1)
+        if self.rgb.nf != self.ir.nf:
+            raise ValueError("RGB and IR sources must contain the same number of files for RGB+IR inference.")
+        self.mode = self.rgb.mode
+        self.bs = self.rgb.bs
+        self.cap = self.rgb.cap
+        self.video_flag = self.rgb.video_flag
+        self.source_type = None
+
+    def __iter__(self):
+        self.rgb_iter = iter(self.rgb)
+        self.ir_iter = iter(self.ir)
+        self.count = 0
+        return self
+
+    def __next__(self):
+        rgb_paths, rgb_imgs, rgb_info = next(self.rgb_iter)
+        ir_paths, ir_imgs, _ = next(self.ir_iter)
+        if len(rgb_imgs) != len(ir_imgs):
+            raise ValueError("RGB and IR batches must be aligned for RGB+IR inference.")
+        imgs = []
+        info = []
+        for rgb_path, rgb_im, ir_path, ir_im, s in zip(rgb_paths, rgb_imgs, ir_paths, ir_imgs, rgb_info):
+            if rgb_im.shape[:2] != ir_im.shape[:2]:
+                ir_im = cv2.resize(ir_im, (rgb_im.shape[1], rgb_im.shape[0]), interpolation=cv2.INTER_LINEAR)
+                if ir_im.ndim == 2:
+                    ir_im = ir_im[..., None]
+            imgs.append(np.concatenate((rgb_im, ir_im), axis=2))
+            info.append(f"{s}[IR: {Path(ir_path).name}] ")
+        self.count = self.rgb.count
+        self.mode = self.rgb.mode
+        self.cap = self.rgb.cap
+        return rgb_paths, imgs, info
+
+    def __len__(self):
+        return len(self.rgb)
+
 class LoadTensor:
     """A class for loading and processing tensor data for object detection tasks.
 
@@ -692,4 +734,4 @@ def get_best_youtube_url(url: str, method: str = "pytube") -> str | None:
 
 
 # Define constants
-LOADERS = (LoadStreams, LoadPilAndNumpy, LoadImagesAndVideos, LoadScreenshots)
+LOADERS = (LoadStreams, LoadPilAndNumpy, LoadImagesAndVideos, LoadPairedImagesAndVideos, LoadScreenshots)

@@ -60,6 +60,7 @@ end2end: # (bool, optional) whether to use end2end head (YOLO26, YOLOv10) for pr
 
 # Predict settings -----------------------------------------------------------------------------------------------------
 source: # (str, optional) path/dir/URL/stream for images or videos; e.g. 'ultralytics/assets' or '0' for webcam
+source_ir: # (str, optional) paired IR path/dir/list for RGB+IR inference; aligned 1:1 with source
 vid_stride: 1 # (int) read every Nth frame for video sources
 stream_buffer: False # (bool) True buffers all frames; False keeps the most recent frame for low-latency streams
 visualize: False # (bool) visualize model features (predict) or TP/FP/FN confusion (val)
